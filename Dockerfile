@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt /moveinsync/
 
 RUN pip install -upgrade pip && \
-    pip install --no-cache-dir -r requiremets.txt
+    pip install --no-cache-dir -r requirements.txt
     
 COPY . /moveinsync/
 
