@@ -58,7 +58,7 @@ pipeline {
 
                         # Clone GitOps repo
                         git clone https://$GIT_USERNAME:$GIT_PASSWORD@github.com/ManojKRISHNAPPA/MoveInSync-gitops.git MoveInSync-gitops
-                        cd MoveInSync-gitops/
+                        cd MoveInSync-gitops/moveinsync/
 
                         git config user.email "jenkins@ci.com"
                         git config user.name "jenkins"
