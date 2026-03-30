@@ -11,7 +11,7 @@ import database as db
 
 # ── Page configuration ─────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="MoveInSync – Employee Transport",
+    page_title="MoveInSync – Microdegree Employee Transportation Management System",
     page_icon="🚗",
     layout="wide",
     initial_sidebar_state="expanded",
