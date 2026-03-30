@@ -147,7 +147,7 @@ def show_home():
         """
         <div class="mis-header">
             <h1>🚗 MoveInSync</h1>
-            <p>Smart Employee Transportation Management System</p>
+            <p>Manoj testing</p>
         </div>
         """,
         unsafe_allow_html=True,
