@@ -56,11 +56,13 @@ pipeline {
         stage('SonarQube Analysis') {
             steps {
                 sh '''
-                    sonar-scanner \
-                    -Dsonar.projectKey=test \
-                    -Dsonar.sources=. \
-                    -Dsonar.host.url=http://57.180.26.114:9000 \
-                    -Dsonar.login=1a59c9906aee8b681997b664f1f820cbc2258bdf
+                docker run --rm \
+                -e SONAR_HOST_URL="http://57.180.26.114:9000" \
+                -e SONAR_LOGIN="1a59c9906aee8b681997b664f1f820cbc2258bdf" \
+                -v $(pwd):/usr/src \
+                sonarsource/sonar-scanner-cli \
+                -Dsonar.projectKey=test \
+                -Dsonar.sources=.
                 '''
             }
         }
