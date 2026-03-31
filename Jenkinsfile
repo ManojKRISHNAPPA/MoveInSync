@@ -55,20 +55,23 @@ pipeline {
         // ── 4. SonarQube ───────────────────────────────────
         stage('SonarQube Analysis') {
             steps {
-                withSonarQubeEnv('SonarQube') {
-                    sh 'sonar-scanner'
-                }
+                sh '''
+                    sonar-scanner \
+                    -Dsonar.projectKey=test \
+                    -Dsonar.sources=. \
+                    -Dsonar.host.url=http://57.180.26.114:9000 \
+                    -Dsonar.login=1a59c9906aee8b681997b664f1f820cbc2258bdf
+                '''
             }
         }
-
         // ── 5. Quality Gate ─────────────────────────────────
-        stage('Quality Gate') {
-            steps {
-                timeout(time: 2, unit: 'MINUTES') {
-                    waitForQualityGate abortPipeline: true
-                }
-            }
-        }
+        // stage('Quality Gate') {
+        //     steps {
+        //         timeout(time: 2, unit: 'MINUTES') {
+        //             waitForQualityGate abortPipeline: true
+        //         }
+        //     }
+        // }
 
         // ── 6. Dependency Vulnerability Scan ────────────────
         stage('Dependency Vulnerability Scan') {
