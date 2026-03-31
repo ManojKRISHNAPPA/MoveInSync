@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /Users/manojkrishnappa/Second-project/gameapp -type d -not -path */.* -not -path */target*)",
+      "Bash(wc:*)"
+    ]
+  }
+}

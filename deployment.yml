@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: moveinsync-deployment
+spec:
+  selector:
+    matchLabels:
+      app: moveinsync
+  replicas: 2
+  template:
+    metadata:
+      labels:
+        app: moveinsync
+    spec:
+      containers:
+      - name: moveinsync
+        image: replace
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8501
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: moveinsync-service
+spec:
+  selector:
+    app: moveinsync
+  ports:
+  - protocol: "TCP"
+    port: 80
+    targetPort: 8501
+  type: LoadBalancer
