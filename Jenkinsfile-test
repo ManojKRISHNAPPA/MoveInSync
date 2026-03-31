@@ -4,166 +4,243 @@ pipeline {
 
     environment {
         AWS_REGION = "ap-northeast-1"
-        IMAGE_TAG  = "${env.BUILD_NUMBER}"
-        IMAGE_NAME = "508262720940.dkr.ecr.ap-northeast-1.amazonaws.com/moveinsync:${IMAGE_TAG}"
-        VENV = "venv"
+        IMAGE_TAG  = "${BUILD_NUMBER}"
+        IMAGE_NAME = "508262720940.dkr.ecr.${AWS_REGION}.amazonaws.com/moveinsync:${IMAGE_TAG}"
+        SONAR_HOST = "http://57.180.26.114:9000"
     }
 
     stages {
 
-        // ── 1. Checkout ─────────────────────────────
-        stage('Git Checkout') {
-            steps {
-                git url: 'https://github.com/ManojKRISHNAPPA/MoveInSync.git', branch: 'main'
-            }
+    // ─────────────────────────────────────────────
+    // 1️⃣ Checkout
+    // ─────────────────────────────────────────────
+    stage('Checkout Code') {
+        steps {
+            git url: 'https://github.com/ManojKRISHNAPPA/MoveInSync.git', branch: 'main'
+        }
+    }
+
+    // ─────────────────────────────────────────────
+    // 2️⃣ Setup Python Virtual Environment
+    // ─────────────────────────────────────────────
+    stage('Setup Python venv') {
+        steps {
+            sh '''
+            python3 -m venv venv
+            . venv/bin/activate
+
+            pip install --upgrade pip
+            pip install -r requirements.txt
+            pip install -r requirements-test.txt
+            '''
+        }
+    }
+
+    // ─────────────────────────────────────────────
+    // 3️⃣ Unit Tests + Coverage
+    // ─────────────────────────────────────────────
+    stage('Unit Tests') {
+        steps {
+            sh '''
+            . venv/bin/activate
+
+            pytest tests/ \
+                --cov=. \
+                --cov-report=xml:coverage.xml \
+                --cov-report=term \
+                --junitxml=test-results.xml
+            '''
         }
 
-        // ── 2. Create Python VENV ───────────────────
-        stage('Setup Python VENV') {
-            steps {
-                sh '''
-                    python3 -m venv $VENV
-                    . $VENV/bin/activate
-                    pip install --upgrade pip
-                    pip install -r requirements.txt
-                    pip install -r requirements-test.txt
-                '''
-            }
-        }
-
-        // ── 3. Unit Tests ───────────────────────────
-        stage('Unit Tests & Coverage') {
-            steps {
-                sh '''
-                    . $VENV/bin/activate
-
-                    pytest tests/ \
-                        --cov=. \
-                        --cov-report=xml:coverage.xml \
-                        --cov-report=term-missing \
-                        --junitxml=test-results.xml \
-                        -v
-                '''
-            }
-            post {
-                always {
-                    junit 'test-results.xml'
-                }
-            }
-        }
-
-        // ── 4. Dependency Scan ──────────────────────
-        stage('Dependency Vulnerability Scan') {
-            steps {
-                sh '''
-                    . $VENV/bin/activate
-
-                    pip install pip-audit
-                    pip-audit -r requirements.txt \
-                        --format=json \
-                        -o pip-audit-report.json || true
-
-                    pip-audit -r requirements.txt
-                '''
-            }
-            post {
-                always {
-                    archiveArtifacts artifacts: 'pip-audit-report.json', allowEmptyArchive: true
-                }
-            }
-        }
-
-        // ── 5. Security Scan & Docker Build ─────────
-        stage('Security Scan & Docker Build') {
-            parallel {
-
-                stage('Trivy Scan') {
-                    steps {
-                        sh 'trivy image python:3.11 || true'
-                    }
-                }
-
-                stage('OPA Dockerfile Rules') {
-                    steps {
-                        sh '''
-                        docker run --rm \
-                        -v $(pwd):/project \
-                        openpolicyagent/conftest \
-                        test --policy dockerfile-security.rego Dockerfile
-                        '''
-                    }
-                }
-
-                stage('Docker Build') {
-                    steps {
-                        sh 'docker build -t moveinsync:latest .'
-                    }
-                }
-            }
-        }
-
-        // ── 6. ECR Login ───────────────────────────
-        stage('ECR Login') {
-            steps {
-                sh '''
-                    aws ecr get-login-password --region $AWS_REGION \
-                    | docker login --username AWS --password-stdin \
-                    508262720940.dkr.ecr.$AWS_REGION.amazonaws.com
-                '''
-            }
-        }
-
-        // ── 7. Tag & Push ──────────────────────────
-        stage('Tag for ECR') {
-            steps {
-                sh "docker tag moveinsync:latest $IMAGE_NAME"
-            }
-        }
-
-        stage('Push to ECR') {
-            steps {
-                sh "docker push $IMAGE_NAME"
-            }
-        }
-
-        // ── 8. GitOps Update ───────────────────────
-        stage('Update GitOps Deployment') {
-            steps {
-                withCredentials([usernamePassword(
-                    credentialsId: 'github-creds',
-                    usernameVariable: 'GIT_USERNAME',
-                    passwordVariable: 'GIT_PASSWORD'
-                )]) {
-
-                    sh '''
-                        rm -rf MoveInSync-gitops || true
-
-                        git clone https://$GIT_USERNAME:$GIT_PASSWORD@github.com/ManojKRISHNAPPA/MoveInSync-gitops.git
-                        cd MoveInSync-gitops/moveinsync
-
-                        git config user.email "jenkins@ci.com"
-                        git config user.name "jenkins"
-
-                        sed -i "s|image: .*moveinsync.*|image: ${IMAGE_NAME}|g" deployment.yaml
-
-                        if ! git diff --quiet; then
-                            git add deployment.yaml
-                            git commit -m "Update image ${IMAGE_NAME}"
-                            git push origin main
-                        else
-                            echo "No changes"
-                        fi
-                    '''
-                }
+        post {
+            always {
+                junit 'test-results.xml'
             }
         }
     }
 
+    // ─────────────────────────────────────────────
+    // 4️⃣ SonarQube Scan
+    // ─────────────────────────────────────────────
+    stage('SonarQube Scan') {
+        steps {
+            withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
+
+                sh '''
+                docker run --rm \
+                  -e SONAR_HOST_URL=$SONAR_HOST \
+                  -e SONAR_LOGIN=$SONAR_TOKEN \
+                  -v $(pwd):/usr/src \
+                  sonarsource/sonar-scanner-cli \
+                  -Dsonar.projectKey=moveinsync \
+                  -Dsonar.sources=.
+                '''
+            }
+        }
+    }
+
+    // ─────────────────────────────────────────────
+    // 5️⃣ Dependency Vulnerability Scan
+    // ─────────────────────────────────────────────
+    stage('Dependency Scan') {
+        steps {
+            sh '''
+            . venv/bin/activate
+
+            pip install pip-audit
+
+            pip-audit -r requirements.txt \
+                --format=json \
+                -o pip-audit-report.json || true
+
+            pip-audit -r requirements.txt || true
+            '''
+        }
+
+        post {
+            always {
+                archiveArtifacts 'pip-audit-report.json'
+            }
+        }
+    }
+
+    // ─────────────────────────────────────────────
+    // 6️⃣ Dockerfile Policy Check (OPA)
+    // ─────────────────────────────────────────────
+    stage('OPA Dockerfile Scan') {
+        steps {
+            sh '''
+            docker run --rm \
+              -v $(pwd):/project \
+              openpolicyagent/conftest \
+              test --policy dockerfile-security.rego Dockerfile
+            '''
+        }
+    }
+
+    // ─────────────────────────────────────────────
+    // 7️⃣ Docker Build
+    // ─────────────────────────────────────────────
+    stage('Docker Build') {
+        steps {
+            sh 'docker build -t moveinsync:latest .'
+        }
+    }
+
+    // ─────────────────────────────────────────────
+    // 8️⃣ Trivy Image Scan
+    // ─────────────────────────────────────────────
+    stage('Trivy Scan') {
+        steps {
+            sh '''
+            trivy image \
+                --severity HIGH,CRITICAL \
+                --exit-code 0 \
+                moveinsync:latest
+            '''
+        }
+    }
+
+    // ─────────────────────────────────────────────
+    // 9️⃣ AWS ECR Login
+    // ─────────────────────────────────────────────
+    stage('ECR Login') {
+        steps {
+            sh '''
+            aws ecr get-login-password --region $AWS_REGION \
+            | docker login --username AWS --password-stdin \
+              508262720940.dkr.ecr.$AWS_REGION.amazonaws.com
+            '''
+        }
+    }
+
+    // ─────────────────────────────────────────────
+    // 🔟 Tag Image
+    // ─────────────────────────────────────────────
+    stage('Tag Image') {
+        steps {
+            sh "docker tag moveinsync:latest $IMAGE_NAME"
+        }
+    }
+
+    // ─────────────────────────────────────────────
+    // 1️⃣1️⃣ Push Image
+    // ─────────────────────────────────────────────
+    stage('Push Image') {
+        steps {
+            sh "docker push $IMAGE_NAME"
+        }
+    }
+
+    // ─────────────────────────────────────────────
+    // 1️⃣2️⃣ Kubernetes Policy Scan (OPA)
+    // ─────────────────────────────────────────────
+    stage('OPA Kubernetes Scan') {
+        steps {
+            sh '''
+            docker run --rm \
+              -v $(pwd):/project \
+              openpolicyagent/conftest \
+              test --policy opa-k8s-security.rego deployment.yml
+            '''
+        }
+    }
+
+    // ─────────────────────────────────────────────
+    // 1️⃣3️⃣ GitOps Update
+    // ─────────────────────────────────────────────
+    stage('Update GitOps Repo') {
+
+        steps {
+            withCredentials([usernamePassword(
+                credentialsId: 'github-creds',
+                usernameVariable: 'GIT_USERNAME',
+                passwordVariable: 'GIT_PASSWORD'
+            )]) {
+
+                sh '''
+                rm -rf MoveInSync-gitops || true
+
+                git clone https://$GIT_USERNAME:$GIT_PASSWORD@github.com/ManojKRISHNAPPA/MoveInSync-gitops.git
+
+                cd MoveInSync-gitops/moveinsync
+
+                git config user.email "jenkins@ci.com"
+                git config user.name "jenkins"
+
+                sed -i "s|image: .*moveinsync.*|image: ${IMAGE_NAME}|g" deployment.yaml
+
+                if ! git diff --quiet; then
+                    git add deployment.yaml
+                    git commit -m "Update image ${IMAGE_NAME}"
+                    git push origin main
+                else
+                    echo "No changes"
+                fi
+                '''
+            }
+        }
+    }
+
+    }
+
+    // ─────────────────────────────────────────────
+    // Cleanup
+    // ─────────────────────────────────────────────
     post {
+
         always {
             archiveArtifacts artifacts: 'coverage.xml,test-results.xml', allowEmptyArchive: true
             sh "docker rmi $IMAGE_NAME || true"
             sh "docker logout || true"
+        }
+
+        success {
+            echo "✅ DevSecOps Pipeline SUCCESS"
+        }
+
+        failure {
+            echo "❌ Pipeline FAILED"
         }
     }
 }
