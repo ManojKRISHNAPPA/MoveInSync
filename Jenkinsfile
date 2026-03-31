@@ -57,8 +57,8 @@ pipeline {
             steps {
                 sh '''
                 docker run --rm \
-                -e SONAR_HOST_URL="http://57.180.26.114:9000" \
-                -e SONAR_LOGIN="1a59c9906aee8b681997b664f1f820cbc2258bdf" \
+                -e SONAR_HOST_URL=http://57.180.26.114:9000 \
+                -e SONAR_LOGIN=$SONAR_TOKEN \
                 -v $(pwd):/usr/src \
                 sonarsource/sonar-scanner-cli \
                 -Dsonar.projectKey=test \
