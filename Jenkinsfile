@@ -1,32 +1,39 @@
 pipeline {
-    agent any
+
+    agent {
+        docker {
+            image 'python:3.11'
+            args '-u root -v /var/run/docker.sock:/var/run/docker.sock'
+        }
+    }
 
     environment {
         AWS_REGION = "ap-northeast-1"
-        IMAGE_TAG  = "${env.BUILD_NUMBER ?: sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()}"
+        IMAGE_TAG  = "${env.BUILD_NUMBER}"
         IMAGE_NAME = "508262720940.dkr.ecr.ap-northeast-1.amazonaws.com/moveinsync:${IMAGE_TAG}"
     }
 
     stages {
 
-        // ── 1. Source ──────────────────────────────────────────────────────────
+        // ── 1. Checkout ─────────────────────────────────────
         stage('Git Checkout') {
             steps {
                 git url: 'https://github.com/ManojKRISHNAPPA/MoveInSync.git', branch: 'main'
             }
         }
 
-        // ── 2. Install dependencies ────────────────────────────────────────────
+        // ── 2. Install Dependencies ─────────────────────────
         stage('Install Dependencies') {
             steps {
                 sh '''
+                    python -m pip install --upgrade pip
                     pip install --quiet -r requirements.txt
                     pip install --quiet -r requirements-test.txt
                 '''
             }
         }
 
-        // ── 3. Unit tests + coverage ───────────────────────────────────────────
+        // ── 3. Unit Tests & Coverage ────────────────────────
         stage('Unit Tests & Coverage') {
             steps {
                 sh '''
@@ -45,7 +52,7 @@ pipeline {
             }
         }
 
-        // ── 4. SonarQube analysis ──────────────────────────────────────────────
+        // ── 4. SonarQube ───────────────────────────────────
         stage('SonarQube Analysis') {
             steps {
                 withSonarQubeEnv('SonarQube') {
@@ -54,7 +61,7 @@ pipeline {
             }
         }
 
-        // ── 5. Quality Gate ────────────────────────────────────────────────────
+        // ── 5. Quality Gate ─────────────────────────────────
         stage('Quality Gate') {
             steps {
                 timeout(time: 2, unit: 'MINUTES') {
@@ -63,12 +70,15 @@ pipeline {
             }
         }
 
-        // ── 6. Dependency vulnerability scan ──────────────────────────────────
+        // ── 6. Dependency Vulnerability Scan ────────────────
         stage('Dependency Vulnerability Scan') {
             steps {
                 sh '''
-                    pip install --quiet pip-audit
-                    pip-audit -r requirements.txt --format=json -o pip-audit-report.json || true
+                    pip install pip-audit
+                    pip-audit -r requirements.txt \
+                        --format=json \
+                        -o pip-audit-report.json || true
+
                     pip-audit -r requirements.txt
                 '''
             }
@@ -79,7 +89,7 @@ pipeline {
             }
         }
 
-        // ── 7. Security scans + Docker build (parallel) ───────────────────────
+        // ── 7. Security Scan & Docker Build ─────────────────
         stage('Security Scan & Docker Build') {
             parallel {
 
@@ -91,30 +101,35 @@ pipeline {
 
                 stage('OPA Dockerfile Rules') {
                     steps {
-                        sh 'docker run --rm -v $(pwd):/project openpolicyagent/conftest test --policy dockerfile-security.rego Dockerfile'
+                        sh '''
+                        docker run --rm \
+                        -v $(pwd):/project \
+                        openpolicyagent/conftest \
+                        test --policy dockerfile-security.rego Dockerfile
+                        '''
                     }
                 }
 
                 stage('Docker Build') {
                     steps {
-                        sh 'docker build -t moveinsync .'
+                        sh 'docker build -t moveinsync:latest .'
                     }
                 }
             }
         }
 
-        // ── 8. ECR login ───────────────────────────────────────────────────────
+        // ── 8. ECR Login ───────────────────────────────────
         stage('ECR Login') {
             steps {
                 sh '''
                     aws ecr get-login-password --region $AWS_REGION \
-                        | docker login --username AWS --password-stdin \
-                          508262720940.dkr.ecr.$AWS_REGION.amazonaws.com
+                    | docker login --username AWS --password-stdin \
+                    508262720940.dkr.ecr.$AWS_REGION.amazonaws.com
                 '''
             }
         }
 
-        // ── 9. Tag & push ──────────────────────────────────────────────────────
+        // ── 9. Tag & Push ──────────────────────────────────
         stage('Tag for ECR') {
             steps {
                 sh "docker tag moveinsync:latest $IMAGE_NAME"
@@ -127,14 +142,19 @@ pipeline {
             }
         }
 
-        // ── 10. OPA Kubernetes rules ───────────────────────────────────────────
+        // ── 10. OPA Kubernetes Rules ───────────────────────
         stage('OPA Kubernetes Rules') {
             steps {
-                sh 'docker run --rm -v $(pwd):/project openpolicyagent/conftest test --policy opa-k8s-security.rego deployment.yml'
+                sh '''
+                docker run --rm \
+                -v $(pwd):/project \
+                openpolicyagent/conftest \
+                test --policy opa-k8s-security.rego deployment.yml
+                '''
             }
         }
 
-        // ── 11. GitOps update ──────────────────────────────────────────────────
+        // ── 11. GitOps Update ──────────────────────────────
         stage('Update GitOps Deployment') {
             steps {
                 withCredentials([usernamePassword(
@@ -143,14 +163,10 @@ pipeline {
                     passwordVariable: 'GIT_PASSWORD'
                 )]) {
                     sh '''
-                        set -e
+                        rm -rf MoveInSync-gitops || true
 
-                        if [ -d "MoveInSync-gitops" ]; then
-                            rm -rf MoveInSync-gitops
-                        fi
-
-                        git clone https://$GIT_USERNAME:$GIT_PASSWORD@github.com/ManojKRISHNAPPA/MoveInSync-gitops.git MoveInSync-gitops
-                        cd MoveInSync-gitops/moveinsync/
+                        git clone https://$GIT_USERNAME:$GIT_PASSWORD@github.com/ManojKRISHNAPPA/MoveInSync-gitops.git
+                        cd MoveInSync-gitops/moveinsync
 
                         git config user.email "jenkins@ci.com"
                         git config user.name "jenkins"
@@ -161,9 +177,8 @@ pipeline {
                             git add deployment.yaml
                             git commit -m "Update moveinsync image to ${IMAGE_NAME}"
                             git push origin main
-                            echo "GitOps repo updated successfully!"
                         else
-                            echo "No changes detected. Skipping commit."
+                            echo "No changes detected"
                         fi
                     '''
                 }
@@ -177,11 +192,13 @@ pipeline {
             sh "docker rmi $IMAGE_NAME || true"
             sh "docker logout || true"
         }
+
         success {
             echo "Pipeline succeeded: ${IMAGE_NAME}"
         }
+
         failure {
-            echo "Pipeline failed. Check the logs above."
+            echo "Pipeline failed. Check logs."
         }
     }
 }
